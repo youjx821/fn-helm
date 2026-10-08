@@ -8,20 +8,15 @@ This chart deploys a fully functioning instance of the [Fn](https://github.com/f
 
 ## Prerequisites
 
+- A Kubernetes cluster >= 1.23 (chart uses `apps/v1`, `networking.k8s.io/v1`)
+
+- Helm >= 3.8 (required for OCI-based sub-chart dependencies)
+
 - persistent volume provisioning support in the underlying infrastructure (for persistent data, see below )
 
-- Install [Helm](https://github.com/kubernetes/helm#install)
+- [Ingress controller](https://kubernetes.github.io/ingress-nginx/deploy/) (e.g. ingress-nginx)
 
-- Initialize Helm by installing Tiller, the server portion of Helm, to your Kubernetes cluster
-
-- [Ingress controller](https://github.com/helm/charts/tree/master/stable/nginx-ingress)
-
-- [Cert manager](https://medium.com/oracledevs/secure-your-kubernetes-services-using-cert-manager-nginx-ingress-and-lets-encrypt-888c8b996260)
-
-
-```bash
-helm init --upgrade
-```
+- [Cert manager](https://cert-manager.io/docs/installation/) >= 1.0 (optional, only needed for TLS)
 
 ## Preparing chart values
 
@@ -69,26 +64,53 @@ Please keep in mind the best way for exposing services is an **ingress controlle
 
 ## Installing the Chart
 
+### Deployment notes for restricted / 2-VM kubeadm clusters
+
+The chart was deployed and verified on a 2-node kubeadm cluster
+(AlmaLinux 10, k8s v1.37.1, containerd + docker, flannel):
+
+1. **Registry mirrors** (docker.io unreachable from the VMs):
+   - containerd: `/etc/containerd/certs.d/docker.io/hosts.toml` **and**
+     `/etc/containerd/certs.d/registry-1.docker.io/hosts.toml` pointing at
+     public mirrors (e.g. `https://docker.1ms.run`), then
+     `systemctl restart containerd`
+   - host docker (used by fn runners to spawn function containers):
+     `/etc/docker/daemon.json` with the same `registry-mirrors`
+2. **Bitnami images**: use the `bitnamilegacy/*` repositories
+   (`postgresql.image.repository=bitnamilegacy/postgresql`,
+   `redis.image.repository=bitnamilegacy/redis`).
+3. **No ingress controller**: expose services via NodePort
+   (`--set ingress.enabled=false --set fn_api.service.type=NodePort
+   --set ui.service.type=NodePort`).
+4. **Runners** mount the host docker socket, use `hostNetwork` and share
+   `/tmp/iofs` (see `fn_runner.*` values) so they can reach the function
+   containers created by the host docker daemon. With `hostNetwork`,
+   schedule at most one runner per node.
+5. Verify: `curl http://<nodeIP>:<apiNodePort>/v2/apps`, then create an app
+   + function (image implementing the FDK listener protocol, e.g.
+   `fnproject/fn-test-utils:latest` pre-pulled on the worker) and
+   `curl -X POST http://<nodeIP>:<lbNodePort>/invoke/<fnID>`.
+
 Clone the fn-helm repo:
 
 ```bash
 git clone https://github.com/fnproject/fn-helm.git && cd fn-helm
 ```
 
-Install chart dependencies from [requirements.yaml](./fn/requirements.yaml):
+Install chart dependencies (PostgreSQL and Redis sub-charts, pulled from the
+[Bitnami OCI registry](https://github.com/bitnami/charts)) as declared in
+[Chart.yaml](./fn/Chart.yaml):
 
 ```bash
-helm dep build fn
+helm dependency build fn
 ```
 
 The default chart will install fn as a private service inside your cluster with ephemeral storage, to configure a public endpoint and persistent storage you should look at [values.yaml](fn/values.yaml) and modify the default settings.
 To install the chart with the release name `my-release`:
 
 ```bash
-helm install --name my-release fn
+helm install my-release fn
 ```
-
-> Note: if you do not pass the --name flag, a release name will be auto-generated. You can view releases by running helm list (or helm ls, for short).
 
 ## Working with Fn 
 
@@ -108,7 +130,7 @@ curl -x http://<ingress-controller-endpoint>:80 api.fn.internal
 Assuming your release is named `my-release`:
 
 ```bash
-helm delete --purge my-release
+helm uninstall my-release
 ```
 
 The command removes all the Kubernetes components associated with the chart and deletes the release.
@@ -118,13 +140,13 @@ The command removes all the Kubernetes components associated with the chart and 
 For detailed configuration, please see [default chart values](fn/values.yaml).
 
  ## Configuring Database Persistence 
- 
-Fn persists application data in MySQL. This is configured using the MySQL Helm Chart.
 
-By default this uses container storage. To configure a persistent volume, set `mysql.*` values in the chart values to that which corresponds to your storage requirements.
+Fn persists application data in PostgreSQL. This is configured using the Bitnami PostgreSQL sub-chart.
 
-e.g. to use an existing persistent volume claim for MySQL storage:
+By default this uses container storage. To configure a persistent volume, set the `postgresql.primary.persistence.*` values in the chart values to that which corresponds to your storage requirements.
+
+e.g. to use an existing persistent volume claim for PostgreSQL storage:
 
 ```bash 
-helm install --name testfn --set mysql.persistence.enabled=true,mysql.persistence.existingClaim=tc-fn-mysql fn
+helm install testfn --set postgresql.primary.persistence.enabled=true,postgresql.primary.persistence.existingClaim=tc-fn-postgresql fn
 ```

@@ -1,26 +1,38 @@
 # Default values for Fn
-imagePullPolicy: Always
+# IfNotPresent avoids re-resolving manifests on every container start
+# (important on clusters reaching registries through slow mirrors).
+imagePullPolicy: IfNotPresent
+
+# Talk to the host's docker daemon through a mounted socket instead of
+# running the embedded docker-in-docker daemon shipped in the fnserver
+# image. Strongly recommended on Kubernetes: much lighter and function
+# containers stay visible/manageable on the host.
+dockerExternal: true
 
 # If non-null, will override the cluster name
 nameOverride: ''
 
 ## Ingress configuration.
-## ref: https://kubernetes.io/docs/user-guide/ingress/
+## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/
 ingress:
   enabled: true
-  annotations:
-    kubernetes.io/ingress.class: nginx
-#    certmanager.k8s.io/cluster-issuer: letsencrypt-staging
-#    kubernetes.io/tls-acme: “true”
+  # Name of the IngressClass to route through (replaces the legacy
+  # kubernetes.io/ingress.class annotation, removed in k8s 1.22+).
+  className: nginx
+  annotations: {}
+#    cert-manager.io/cluster-issuer: letsencrypt-staging
 
-# secret refernce is a k8s secret to your
+# TLS configuration (requires cert-manager >= 1.0 installed on the cluster).
 tls:
   enabled: false
   default_issuer_name: letsencrypt-staging
   acme_registration_email: <your@email.com>
-#  secret_reference: fn-tls
+  # Name of the secret holding the ACME account private key.
+  # The Ingress TLS secret defaults to <release>-fn-tls when unset.
+  #  secret_reference: fn-tls
+  # For production certificates use the Let's Encrypt production ACME server:
+  #  server: https://acme-v02.api.letsencrypt.org/directory
   server: https://acme-staging-v02.api.letsencrypt.org/directory
-
 
 # Fn runner deployment definition
 # Nodes in this deployment responsible for the functions execution
@@ -37,6 +49,16 @@ fn_runner:
       cpu: "500m"
   nodeSelector: {} # K8s node selectors
   tolerations: [] #K8s mode taint toleration
+  # Fn runners execute functions as sibling containers on the host docker
+  # daemon, so the runner pod needs the host's docker socket mounted AND
+  # host networking to reach the docker bridge network of those containers.
+  # Requires docker (or a compatible daemon) running on the worker nodes.
+  # NOTE: with hostNetwork, each node can only host ONE runner pod
+  # (fixed grpc port 9191); use replicas <= number of worker nodes.
+  hostNetwork: true
+  docker:
+    enabled: true
+    hostPath: /var/run/docker.sock
   grpc_port: 9191 # Fn runner node GRPC port
   service:
     grpc_port: 9191 # Fn runner service GRPC port
@@ -86,7 +108,9 @@ fn_api:
     annotations: {}
     ingress_hostname: api.fn.internal
   env:
-    FN_DB_URL: mysql://fnapp:$(FN_DB_PASSWD)@tcp($(FN_DB_HOST):3306)/fndb
+    # NOTE: lib/pq defaults to sslmode=require; the Bitnami PostgreSQL chart
+    # runs without TLS, so sslmode=disable must be set explicitly.
+    FN_DB_URL: postgres://fnapp:$(FN_DB_PASSWD)@$(FN_DB_HOST):5432/fndb?sslmode=disable
     FN_MQ_URL: redis://$(FN_MQ_HOST):6379/
     FN_LOG_LEVEL: INFO
 
@@ -112,6 +136,12 @@ flow:
   image: fnproject/flow
   tag: 0.1.85
   logLevel: info
+  # Fn Flow (<= 0.1.85, project archived) does NOT support the postgres
+  # driver - it only accepts mysql/sqlite3. Since the core Fn DB moved to
+  # PostgreSQL, flow defaults to embedded sqlite storage.
+  # Set usePostgresql: true only if you run a flow build with postgres support.
+  usePostgresql: false
+  dbUrl: sqlite3:///data/flow.db
   service:
     port: 80
     type: ClusterIP
@@ -126,35 +156,44 @@ flow:
       cpu: "500m"
 
 ##
-## MySQL chart configuration
+## PostgreSQL sub-chart configuration (Bitnami, oci://registry-1.docker.io/bitnamicharts/postgresql)
+## ref: https://github.com/bitnami/charts/tree/main/bitnami/postgresql
 ##
-mysql:
-  persistence:
-    enabled: false
-    nodeSelector: mysql-storage
-    ## If defined, volume.beta.kubernetes.io/storage-class: <storageClass>
-    ## Default: volume.alpha.kubernetes.io/storage-class: default
-    ##
-    # storageClass:
-    storageClass: mysql
-    accessMode: ReadWriteOnce
-    size: 8Gi
-
-  mysqlDatabase: fndb
-  mysqlUser: fnapp
-  mysqlPassword: boomsauce
+postgresql:
+  enabled: true
+  architecture: standalone
+  auth:
+    enablePostgresUser: true
+    database: fndb
+    username: fnapp
+    # CHANGE ME in production, or use auth.existingSecret instead.
+    password: boomsauce
+    # existingSecret: my-secret
+  primary:
+    persistence:
+      enabled: false
+      # storageClass: postgresql
+      accessModes:
+        - ReadWriteOnce
+      size: 8Gi
+    # nodeSelector:
+    #   kubernetes.io/role: postgresql-storage
 
 ##
-## Redis chart configuration
+## Redis sub-chart configuration (Bitnami, oci://registry-1.docker.io/bitnamicharts/redis)
+## ref: https://github.com/bitnami/charts/tree/main/bitnami/redis
+## The Fn MQ does not need Redis AUTH; the service is reachable at
+## <release>-redis-master when using the standalone architecture.
 ##
 redis:
-  persistence:
-    enabled: false
-    nodeSelector: redis-storage
-    storageClass: redis
-    accessMode: ReadWriteOnce
-    size: 8Gi
-  usePassword: false
-
-rbac:
   enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false
+      # storageClass: redis
+      accessModes:
+        - ReadWriteOnce
+      size: 8Gi

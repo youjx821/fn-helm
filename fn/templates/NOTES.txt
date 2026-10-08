@@ -1,36 +1,30 @@
-Your K8s cluster MUST have configured with NGINX ingress controller.
-See https://github.com/helm/charts/tree/master/stable/nginx-ingress.
+Your K8s cluster MUST have an ingress controller installed (e.g. ingress-nginx).
+See https://kubernetes.github.io/ingress-nginx/deploy/.
 
-For SSL/TLS support please take a look at:
-https://medium.com/oracledevs/secure-your-kubernetes-services-using-cert-manager-nginx-ingress-and-lets-encrypt-888c8b996260
+For SSL/TLS support install cert-manager (>= 1.0) and enable the `tls` values:
+See https://cert-manager.io/docs/installation/
 
 The Fn service can be accessed within your cluster at:
 
- - http://{{ template "fullname" . }}.{{ .Values.fn_api.service.ingress_hostname}}:{{ .Values.fn_api.service.port}}
+ - http://{{ template "fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.fn_api.service.port }}
 
 Then you need to update your environment variable `HTTP_HOST` with the corresponding ingress controller endpoint or an IP address:
 
-    export {HTTP,HTTPS}_PROXY=$(kubectl get svc <ingress-nginx-ingress-controller> -o jsonpath='http://{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}')
+    export {HTTP,HTTPS}_PROXY=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='http://{.status.loadBalancer.ingress[0].ip}:{.spec.ports[?(@.name=="http")].port}')
 
 For instance:
 
-    kubectl get svc | grep ingress
+    kubectl get svc -n ingress-nginx
 
-    ingress-nginx-ingress-controller        10.96.224.0     XXX.XXX.XXX.XXX   80:31698/TCP,443:30947/TCP   105d
-    ingress-nginx-ingress-default-backend   10.96.140.84    <none>            80/TCP                       105d
+    ingress-nginx-controller   LoadBalancer   10.96.224.0     XXX.XXX.XXX.XXX   80:31698/TCP,443:30947/TCP   105d
 
-So, you'd need `ingress-nginx-ingress-controller` service. The command from above will evaluate an HTTP endpoint:
-
-    kubectl get svc ingress-nginx-ingress-controller -o jsonpath='http://{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}'
+So, you'd need `ingress-nginx-controller` service. The command from above will evaluate an HTTP endpoint:
 
     http://XXX.XXX.XXX.XXX:80
 
 or HTTPS endpoint:
 
-    kubectl get svc ingress-nginx-ingress-controller -o jsonpath='https://{.status.loadBalancer.ingress[0].ip}:{.spec.ports[1].port}'
-
-    http://XXX.XXX.XXX.XXX:443
-
+    https://XXX.XXX.XXX.XXX:443
 
 Then you need to create Fn CLI context:
 
@@ -53,11 +47,11 @@ So, you are ready to go:
 
     echo -e '{"name":"john"}' | fn invoke first-app first-fn
 
-{{- if not  .Values.mysql.persistence.enabled }}
+{{- if not .Values.postgresql.primary.persistence.enabled }}
 
 ############################################################################
 ###   WARNING: Persistence is disabled!!! You will lose function and     ###
-###   flow state when the MySQL pod is terminated.                       ###
+###   flow state when the PostgreSQL pod is terminated.                  ###
 ###   See the README.md for instructions on configuring persistence.     ###
 ############################################################################
 {{- end }}

@@ -1,4 +1,4 @@
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "fullname" . }}-flow-depl
@@ -9,6 +9,11 @@ metadata:
     release: {{ .Release.Name }}
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: {{ template "fullname" . }}
+      release: {{ .Release.Name }}
+      role: flow
   template:
     metadata:
        labels:
@@ -37,14 +42,21 @@ spec:
             value: {{ .Values.flow.logLevel }}
           - name: LISTEN
             value: :8081
+          {{- if .Values.flow.usePostgresql }}
           - name: DB_PASSWD
             valueFrom:
               secretKeyRef:
-                name: {{ .Release.Name }}-mysql
-                key: mysql-password
+                name: {{ .Release.Name }}-postgresql
+                key: password
           - name: DB_HOST
-            value: {{ .Release.Name }}-mysql
+            value: {{ .Release.Name }}-postgresql
           - name: DB_URL
-            value: mysql://fnapp:$(DB_PASSWD)@tcp($(DB_HOST):3306)/fndb
+            value: postgres://fnapp:$(DB_PASSWD)@$(DB_HOST):5432/fndb?sslmode=disable
+          {{- else }}
+          # NOTE: Fn Flow (<= 0.1.85) only supports mysql/sqlite3 drivers and
+          # cannot use PostgreSQL, so it defaults to embedded sqlite storage.
+          - name: DB_URL
+            value: {{ .Values.flow.dbUrl | quote }}
+          {{- end }}
           - name: API_URL
-            value: http://{{ template "fullname" . }}-api
+            value: http://{{ template "fullname" . }}:{{ .Values.fn_api.service.port }}

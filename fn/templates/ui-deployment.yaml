@@ -1,6 +1,6 @@
 {{- if .Values.ui.enabled }}
 
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "fullname" . }}-ui
@@ -11,6 +11,11 @@ metadata:
     release: {{ .Release.Name }}
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: {{ template "fullname" . }}
+      release: {{ .Release.Name }}
+      role: ui
   template:
     metadata:
        labels:
@@ -30,8 +35,8 @@ spec:
             - containerPort: {{ .Values.ui.service.port }}
           env:
             - name: API_URL
-              value: http://{{ template "fullname" . }}-api
+              value: http://{{ template "fullname" . }}:{{ .Values.fn_api.service.port }}
             - name: COMPLETER_BASE_URL
-              value: http://{{ template "fullname" . }}-flow
+              value: http://{{ template "fullname" . }}-flow:{{ .Values.flow.service.port }}
 
 {{- end}}

@@ -1,4 +1,4 @@
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "fullname" . }}
@@ -9,6 +9,11 @@ metadata:
     release: {{ .Release.Name }}
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: {{ template "fullname" . }}
+      release: {{ .Release.Name }}
+      role: fn-service
   template:
     metadata:
        labels:
@@ -30,6 +35,11 @@ spec:
         - name: api
           image: {{ .Values.fn_api.image }}:{{ .Values.fn_api.tag }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{- if .Values.dockerExternal }}
+          # skip the image's dind entrypoint; exec fnserver directly
+          command: ["./fnserver"]
+          workingDir: /app
+          {{- end }}
           resources:
 {{ toYaml .Values.fn_api.resources | indent 12 }}
           securityContext:
@@ -46,12 +56,12 @@ spec:
           - name: FN_DB_PASSWD
             valueFrom:
               secretKeyRef:
-                name: {{ .Release.Name }}-mysql
-                key: mysql-password
+                name: {{ .Release.Name }}-postgresql
+                key: password
           - name: FN_DB_HOST
-            value: {{ .Release.Name }}-mysql
+            value: {{ .Release.Name }}-postgresql
           - name: FN_MQ_HOST
-            value: {{ .Release.Name }}-redis
+            value: {{ .Release.Name }}-redis-master
           - name: FN_PORT
             value: {{ .Values.fn_api.container_port | quote }}
           - name: FN_NODE_TYPE
@@ -71,6 +81,11 @@ spec:
         - name: runner-lb
           image: {{ .Values.fn_lb_runner.image }}:{{ .Values.fn_lb_runner.tag }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{- if .Values.dockerExternal }}
+          # skip the image's dind entrypoint; exec fnserver directly
+          command: ["./fnserver"]
+          workingDir: /app
+          {{- end }}
           resources:
 {{ toYaml .Values.fn_lb_runner.resources | indent 12 }}
           securityContext:
